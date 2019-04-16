@@ -1,4 +1,5 @@
 #include "avformat.h"
+#include "network.h"
 #include "url.h"
 #include "libavutil/opt.h"
 
@@ -9,6 +10,7 @@ typedef struct BeQuicContext {
     int fd;
     int verify_certificate;
     int timeout;
+    BeQuicLogCallback log_callback;
 } BeQuicContext;
 
 #define OFFSET(x) offsetof(BeQuicContext, x)
@@ -28,6 +30,11 @@ static const AVClass bequic_class = {
     .version    = LIBAVUTIL_VERSION_INT,
 };
 
+static void be_quic_log_callback(
+    const char* severity, const char* file, int line, const char* msg) {
+    av_log(NULL, AV_LOG_INFO, "[%s:%d] %s", file, line, msg);
+}
+
 static int quic_open(URLContext *h, const char *uri, int flags) {
     BeQuicContext *s = h->priv_data;
     int ret = 0;
@@ -39,14 +46,27 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
     const char *scheme = NULL;
     const char *deli = "://";
     char *p = NULL;
+    char hostname[1024] = {0};
     char protocol[1024] = {0};
+    char path[1024] = {0};
+    char ip[16] = {0};
+    int port = 0;
+    char portstr[16] = {0};
+    struct addrinfo hints = {0};
+    struct addrinfo *ai = NULL;
+    struct sockaddr_in *addr = NULL;
     do {
         if (uri == NULL) {            
             ret = AVERROR_UNKNOWN;
             break;
         }
+
+        if (s->log_callback == NULL) {
+            s->log_callback = be_quic_log_callback;
+            be_quic_set_log_callback(s->log_callback);
+        }
         
-        av_url_split(protocol, sizeof(protocol), NULL, 0, NULL, 0, NULL, NULL, 0, uri);
+        av_url_split(protocol, sizeof(protocol), NULL, 0, hostname, sizeof(hostname), &port, path, sizeof(path), uri);
         if (strncmp(protocol, "quic", strlen(protocol)) == 0) {
             scheme = http_scheme;
         } else if (strncmp(protocol, "quics", strlen(protocol)) == 0) {
@@ -65,10 +85,29 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
         strcpy(url, scheme);
         strcat(url, p);
 
-        printf("be_quic_open %s verify:%s timeout:%d.\n", url, s->verify_certificate?"true":"false", s->timeout);
+        av_log(h, AV_LOG_INFO, "be_quic_open %s verify:%s timeout:%d.\n", url, s->verify_certificate?"true":"false", s->timeout);
+
+#ifdef ANDROID
+        hints.ai_family     = AF_UNSPEC;
+        hints.ai_socktype   = SOCK_STREAM;
+        snprintf(portstr, sizeof(portstr), "%d", port);
+
+        if (getaddrinfo(hostname, portstr, &hints, &ai)) {
+            av_log(h, AV_LOG_ERROR, "Failed to resolve hostname %s: %s\n", hostname, gai_strerror(ret));
+            ret = AVERROR(EIO);
+            break;
+        }
+
+        addr = (struct sockaddr_in *)ai->ai_addr;
+        inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+
+        av_log(h, AV_LOG_INFO, "Android resolve %s to %s.\n", hostname, ip);
+#endif
 
         rv = be_quic_open(
             url,
+            ip,
+            port,
             NULL, //Default to "GET"
             NULL,
             0,
@@ -76,6 +115,8 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
             0,
             s->verify_certificate,
             s->timeout);
+
+        av_log(h, AV_LOG_INFO, "be_quic_open return %d.\n", rv);
         if (rv <= 0) {
             ret = AVERROR_UNKNOWN;
             break;
@@ -110,7 +151,10 @@ static int64_t quic_seek(URLContext *h, int64_t off, int whence) {
 
 static int quic_close(URLContext *h) {
     BeQuicContext *s = h->priv_data;
-    be_quic_close(s->fd);
+    int ret = 0;
+    av_log(h, AV_LOG_INFO, "closing quic handle %d.\n", s->fd);
+    ret = be_quic_close(s->fd);
+    av_log(h, AV_LOG_INFO, "be_quic_close return %d.\n", ret);
     return 0;
 }
 
