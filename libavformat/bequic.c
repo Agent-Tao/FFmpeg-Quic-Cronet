@@ -87,7 +87,7 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
 
         av_log(h, AV_LOG_INFO, "be_quic_open %s verify:%s timeout:%d.\n", url, s->verify_certificate?"true":"false", s->timeout);
 
-#ifdef ANDROID
+#if 0
         hints.ai_family     = AF_UNSPEC;
         hints.ai_socktype   = SOCK_STREAM;
         snprintf(portstr, sizeof(portstr), "%d", port);
