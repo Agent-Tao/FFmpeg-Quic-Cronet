@@ -9,6 +9,10 @@ typedef struct BeQuicContext {
     const AVClass *class;
     int fd;
     int verify_certificate;
+    int ietf_draft_version;
+    int handshark_version;
+    int transport_version;
+    int use_ffmpeg_resolve;
     int timeout;
     BeQuicLogCallback log_callback;
 } BeQuicContext;
@@ -19,6 +23,10 @@ typedef struct BeQuicContext {
 
 static const AVOption bequic_options[] = {
     { "verify_certificate",     "Whether verify certificate.",              OFFSET(verify_certificate),     AV_OPT_TYPE_BOOL,   { .i64 = 1 },   0,   1,          .flags = D|E },
+    { "ietf_draft_version",     "Ietf draft version.",    		            OFFSET(ietf_draft_version),     AV_OPT_TYPE_INT,    { .i64 = -1 },  -1,  256,        .flags = D|E },
+    { "handshark_version",      "Quic handshake version.",    		        OFFSET(handshark_version),      AV_OPT_TYPE_INT,    { .i64 = 1 },   1,   2,    	     .flags = D|E },
+    { "transport_version",      "Quic transport version.",    		        OFFSET(transport_version),      AV_OPT_TYPE_INT,    { .i64 = 43 },  39,  99, 	     .flags = D|E },
+    { "use_ffmpeg_resolve",     "Whether use ffmpeg resolve.",              OFFSET(use_ffmpeg_resolve),	    AV_OPT_TYPE_BOOL,   { .i64 = 1 },   0,   1,    	     .flags = D|E },
     { "timeout",                "Quic session establish timeout in ms.",    OFFSET(timeout),                AV_OPT_TYPE_INT,    { .i64 = -1 },  -1,  INT_MAX,    .flags = D|E },
     { NULL }
 };
@@ -76,6 +84,10 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
             break;
         }
 
+        if (port <= 0) {
+           port = 443;
+        }
+
         //Replace protocol with certain scheme.
         p       = strstr(uri, deli);
         p       += strlen(deli);
@@ -85,24 +97,33 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
         strcpy(url, scheme);
         strcat(url, p);
 
-        av_log(h, AV_LOG_INFO, "be_quic_open %s verify:%s timeout:%d.\n", url, s->verify_certificate?"true":"false", s->timeout);
+        av_log(
+            h, AV_LOG_INFO,
+            "be_quic_open %s, verify:%s, ietf_draft_version:%d, handshark_version:%d, transport_version:%d, use_ffmpeg_resolve:%s, timeout:%d.\n",
+            url,
+            s->verify_certificate?"true":"false",
+            s->ietf_draft_version,
+            s->handshark_version,
+            s->transport_version,
+            s->use_ffmpeg_resolve?"true":"false",
+            s->timeout);
 
-#if 0
-        hints.ai_family     = AF_UNSPEC;
-        hints.ai_socktype   = SOCK_STREAM;
-        snprintf(portstr, sizeof(portstr), "%d", port);
+	    if (s->use_ffmpeg_resolve) {
+       	    hints.ai_family     = AF_UNSPEC;
+	        hints.ai_socktype   = SOCK_STREAM;
+            snprintf(portstr, sizeof(portstr), "%d", port);
 
-        if (getaddrinfo(hostname, portstr, &hints, &ai)) {
-            av_log(h, AV_LOG_ERROR, "Failed to resolve hostname %s: %s\n", hostname, gai_strerror(ret));
-            ret = AVERROR(EIO);
-            break;
+            if (getaddrinfo(hostname, portstr, &hints, &ai)) {
+                av_log(h, AV_LOG_ERROR, "Failed to resolve hostname %s: %s\n", hostname, gai_strerror(ret));
+                ret = AVERROR(EIO);
+                break;
+            }
+
+            addr = (struct sockaddr_in *)ai->ai_addr;
+            inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
+
+            av_log(h, AV_LOG_INFO, "Resolve %s to %s:%d\n", hostname, ip, port);
         }
-
-        addr = (struct sockaddr_in *)ai->ai_addr;
-        inet_ntop(AF_INET, &addr->sin_addr, ip, sizeof(ip));
-
-        av_log(h, AV_LOG_INFO, "Android resolve %s to %s.\n", hostname, ip);
-#endif
 
         rv = be_quic_open(
             url,
@@ -114,6 +135,9 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
             NULL,
             0,
             s->verify_certificate,
+	        s->ietf_draft_version,
+	        s->handshark_version,
+	        s->transport_version,
             s->timeout);
 
         av_log(h, AV_LOG_INFO, "be_quic_open return %d.\n", rv);
@@ -143,7 +167,7 @@ static int quic_write(URLContext *h, const uint8_t *buf, int size) {
     return ret;
 }
 
-static int64_t quic_seek(URLContext *h, int64_t off, int whence) {  
+static int64_t quic_seek(URLContext *h, int64_t off, int whence) {
     BeQuicContext *s = h->priv_data;
     int64_t ret = be_quic_seek(s->fd, off, whence);
     return ret;
