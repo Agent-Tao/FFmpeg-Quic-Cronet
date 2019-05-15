@@ -14,6 +14,7 @@ typedef struct BeQuicContext {
     int transport_version;
     int use_ffmpeg_resolve;
     int timeout;
+    int seekable;
     BeQuicLogCallback log_callback;
 } BeQuicContext;
 
@@ -28,6 +29,7 @@ static const AVOption bequic_options[] = {
     { "transport_version",      "Quic transport version.",    		        OFFSET(transport_version),      AV_OPT_TYPE_INT,    { .i64 = 43 },  39,  99, 	     .flags = D|E },
     { "use_ffmpeg_resolve",     "Whether use ffmpeg resolve.",              OFFSET(use_ffmpeg_resolve),	    AV_OPT_TYPE_BOOL,   { .i64 = 1 },   0,   1,    	     .flags = D|E },
     { "timeout",                "Quic session establish timeout in ms.",    OFFSET(timeout),                AV_OPT_TYPE_INT,    { .i64 = -1 },  -1,  INT_MAX,    .flags = D|E },
+    { "seekable",               "Control seekability of connection.",       OFFSET(seekable),               AV_OPT_TYPE_BOOL,   { .i64 = 1 },   -1,  1,          .flags = D|E },
     { NULL }
 };
 
@@ -64,7 +66,7 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
     struct addrinfo *ai = NULL;
     struct sockaddr_in *addr = NULL;
     do {
-        if (uri == NULL) {            
+        if (uri == NULL) {
             ret = AVERROR_UNKNOWN;
             break;
         }
@@ -86,6 +88,12 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
 
         if (port <= 0) {
            port = 443;
+        }
+
+        if (s->seekable == 1) {
+            h->is_streamed = 0;
+        } else {
+            h->is_streamed = 1;
         }
 
         //Replace protocol with certain scheme.
@@ -158,7 +166,13 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
 static int quic_read(URLContext *h, uint8_t *buf, int size) {
     BeQuicContext *s = h->priv_data;
     int ret = be_quic_read(s->fd, buf, size, s->timeout);
-    return ret;
+    if (ret > 0) {
+        return ret;
+    } else if (ret == kBeQuicErrorCode_Eof) {
+        return AVERROR_EOF;
+    } else {
+        return AVERROR(ENOSYS);
+    }
 }
 
 static int quic_write(URLContext *h, const uint8_t *buf, int size) {
@@ -168,8 +182,19 @@ static int quic_write(URLContext *h, const uint8_t *buf, int size) {
 }
 
 static int64_t quic_seek(URLContext *h, int64_t off, int whence) {
+    if (h->is_streamed) {
+        if (whence == AVSEEK_SIZE) {
+            return UINT64_MAX;
+        } else {
+            return AVERROR(ENOSYS);
+        }
+    }
+
     BeQuicContext *s = h->priv_data;
     int64_t ret = be_quic_seek(s->fd, off, whence);
+    if (ret < 0) {
+        ret = AVERROR(ENOSYS);
+    }
     return ret;
 }
 
