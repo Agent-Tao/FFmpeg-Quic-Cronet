@@ -13,6 +13,8 @@ typedef struct BeQuicContext {
     int handshark_version;
     int transport_version;
     int use_ffmpeg_resolve;
+    int block_size;         //-1:Default 1MB block size, 0:Not request block, notice MUST BE 0 when play a stream, >0:Valid block size.
+    int block_consume;      //-1:Default 50% percent, >=0:Valid percent.
     int timeout;
     int seekable;
     BeQuicLogCallback log_callback;
@@ -23,13 +25,15 @@ typedef struct BeQuicContext {
 #define E AV_OPT_FLAG_ENCODING_PARAM
 
 static const AVOption bequic_options[] = {
-    { "verify_certificate",     "Whether verify certificate.",              OFFSET(verify_certificate),     AV_OPT_TYPE_BOOL,   { .i64 = 1 },   0,   1,          .flags = D|E },
-    { "ietf_draft_version",     "Ietf draft version.",    		            OFFSET(ietf_draft_version),     AV_OPT_TYPE_INT,    { .i64 = -1 },  -1,  256,        .flags = D|E },
-    { "handshark_version",      "Quic handshake version.",    		        OFFSET(handshark_version),      AV_OPT_TYPE_INT,    { .i64 = 1 },   1,   2,    	     .flags = D|E },
-    { "transport_version",      "Quic transport version.",    		        OFFSET(transport_version),      AV_OPT_TYPE_INT,    { .i64 = 43 },  39,  99, 	     .flags = D|E },
-    { "use_ffmpeg_resolve",     "Whether use ffmpeg resolve.",              OFFSET(use_ffmpeg_resolve),	    AV_OPT_TYPE_BOOL,   { .i64 = 1 },   0,   1,    	     .flags = D|E },
-    { "timeout",                "Quic session establish timeout in ms.",    OFFSET(timeout),                AV_OPT_TYPE_INT,    { .i64 = -1 },  -1,  INT_MAX,    .flags = D|E },
-    { "seekable",               "Control seekability of connection.",       OFFSET(seekable),               AV_OPT_TYPE_BOOL,   { .i64 = 1 },   -1,  1,          .flags = D|E },
+    { "verify_certificate",  "Whether verify certificate.",            OFFSET(verify_certificate),  AV_OPT_TYPE_BOOL,  { .i64 = 1 },       0,      1,        .flags = D|E },
+    { "ietf_draft_version",  "Ietf draft version.",                    OFFSET(ietf_draft_version),  AV_OPT_TYPE_INT,   { .i64 = -1 },      -1,     256,      .flags = D|E },
+    { "handshark_version",   "Quic handshake version.",                OFFSET(handshark_version),   AV_OPT_TYPE_INT,   { .i64 = 1 },       1,      2,        .flags = D|E },
+    { "transport_version",   "Quic transport version.",                OFFSET(transport_version),   AV_OPT_TYPE_INT,   { .i64 = 43 },      39,     99,       .flags = D|E },
+    { "use_ffmpeg_resolve",  "Whether use ffmpeg resolve.",            OFFSET(use_ffmpeg_resolve),  AV_OPT_TYPE_BOOL,  { .i64 = 1 },       0,      1,        .flags = D|E },
+    { "timeout",             "Quic session establish timeout in ms.",  OFFSET(timeout),             AV_OPT_TYPE_INT,   { .i64 = -1 },      -1,     INT_MAX,  .flags = D|E },
+    { "seekable",            "Control seekability of connection.",     OFFSET(seekable),            AV_OPT_TYPE_BOOL,  { .i64 = 1 },       -1,     1,        .flags = D|E },
+    { "block_size",          "Request file in blocks with the size.",  OFFSET(block_size),          AV_OPT_TYPE_INT,   { .i64 = 524288 },  -1,     INT_MAX,  .flags = D|E },
+    { "block_consume",       "Block consume percent threshold.",       OFFSET(block_consume),       AV_OPT_TYPE_INT,   { .i64 = 50 },      0,      100,      .flags = D|E },
     { NULL }
 };
 
@@ -107,13 +111,15 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
 
         av_log(
             h, AV_LOG_INFO,
-            "be_quic_open %s, verify:%s, ietf_draft_version:%d, handshark_version:%d, transport_version:%d, use_ffmpeg_resolve:%s, timeout:%d.\n",
+            "be_quic_open %s, verify:%s, ietf_draft_version:%d, handshark_version:%d, transport_version:%d, use_ffmpeg_resolve:%s, block_size:%d, block_consume:%d, timeout:%d.\n",
             url,
             s->verify_certificate?"true":"false",
             s->ietf_draft_version,
             s->handshark_version,
             s->transport_version,
             s->use_ffmpeg_resolve?"true":"false",
+            s->block_size,
+            s->block_consume,
             s->timeout);
 
 	    if (s->use_ffmpeg_resolve) {
@@ -146,6 +152,8 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
 	        s->ietf_draft_version,
 	        s->handshark_version,
 	        s->transport_version,
+            s->block_size,
+            s->block_consume,
             s->timeout);
 
         av_log(h, AV_LOG_INFO, "be_quic_open return %d.\n", rv);
@@ -182,6 +190,9 @@ static int quic_write(URLContext *h, const uint8_t *buf, int size) {
 }
 
 static int64_t quic_seek(URLContext *h, int64_t off, int whence) {
+    BeQuicContext *s = NULL;
+    int64_t ret = -1;
+
     if (h->is_streamed) {
         if (whence == AVSEEK_SIZE) {
             return UINT64_MAX;
@@ -190,8 +201,8 @@ static int64_t quic_seek(URLContext *h, int64_t off, int whence) {
         }
     }
 
-    BeQuicContext *s = h->priv_data;
-    int64_t ret = be_quic_seek(s->fd, off, whence);
+    s = h->priv_data;
+    ret = be_quic_seek(s->fd, off, whence);
     if (ret < 0) {
         ret = AVERROR(ENOSYS);
     }
