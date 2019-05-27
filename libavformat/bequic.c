@@ -13,10 +13,10 @@ typedef struct BeQuicContext {
     int handshark_version;
     int transport_version;
     int use_ffmpeg_resolve;
-    int block_size;         //-1:Default 1MB block size, 0:Not request block, notice MUST BE 0 when play a stream, >0:Valid block size.
-    int block_consume;      //-1:Default 50% percent, >=0:Valid percent.
     int timeout;
     int seekable;
+    int block_size;         //-1:Default 1MB block size, 0:Not request block, notice MUST BE 0 when play a stream, >0:Valid block size.
+    int block_consume;      //-1:Default 50% percent, >=0:Valid percent.
     BeQuicLogCallback log_callback;
 } BeQuicContext;
 
@@ -24,7 +24,7 @@ typedef struct BeQuicContext {
 #define D AV_OPT_FLAG_DECODING_PARAM
 #define E AV_OPT_FLAG_ENCODING_PARAM
 
-static const AVOption bequic_options[] = {
+static const AVOption options[] = {
     { "verify_certificate",  "Whether verify certificate.",            OFFSET(verify_certificate),  AV_OPT_TYPE_BOOL,  { .i64 = 1 },       0,      1,        .flags = D|E },
     { "ietf_draft_version",  "Ietf draft version.",                    OFFSET(ietf_draft_version),  AV_OPT_TYPE_INT,   { .i64 = -1 },      -1,     256,      .flags = D|E },
     { "handshark_version",   "Quic handshake version.",                OFFSET(handshark_version),   AV_OPT_TYPE_INT,   { .i64 = 1 },       1,      2,        .flags = D|E },
@@ -37,12 +37,16 @@ static const AVOption bequic_options[] = {
     { NULL }
 };
 
-static const AVClass bequic_class = {
-    .class_name = "bequic",
-    .item_name  = av_default_item_name,
-    .option     = bequic_options,
-    .version    = LIBAVUTIL_VERSION_INT,
-};
+#define QUIC_CLASS(flavor)                          \
+static const AVClass flavor ## _context_class = {   \
+    .class_name = # flavor,                         \
+    .item_name  = av_default_item_name,             \
+    .option     = options,                          \
+    .version    = LIBAVUTIL_VERSION_INT,            \
+}
+
+QUIC_CLASS(quic);
+QUIC_CLASS(quics);
 
 static void be_quic_log_callback(
     const char* severity, const char* file, int line, const char* msg) {
@@ -122,9 +126,9 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
             s->block_consume,
             s->timeout);
 
-	    if (s->use_ffmpeg_resolve) {
-       	    hints.ai_family     = AF_UNSPEC;
-	        hints.ai_socktype   = SOCK_STREAM;
+        if (s->use_ffmpeg_resolve) {
+            hints.ai_family     = AF_UNSPEC;
+            hints.ai_socktype   = SOCK_STREAM;
             snprintf(portstr, sizeof(portstr), "%d", port);
 
             if (getaddrinfo(hostname, portstr, &hints, &ai)) {
@@ -149,9 +153,9 @@ static int quic_open(URLContext *h, const char *uri, int flags) {
             NULL,
             0,
             s->verify_certificate,
-	        s->ietf_draft_version,
-	        s->handshark_version,
-	        s->transport_version,
+            s->ietf_draft_version,
+            s->handshark_version,
+            s->transport_version,
             s->block_size,
             s->block_consume,
             s->timeout);
@@ -232,7 +236,7 @@ const URLProtocol ff_bequic_protocol = {
     .url_close           = quic_close,
     .url_get_file_handle = quic_get_file_handle,
     .priv_data_size      = sizeof(BeQuicContext),
-    .priv_data_class     = &bequic_class,
+    .priv_data_class     = &quic_context_class,
     .flags               = URL_PROTOCOL_FLAG_NETWORK,
     .default_whitelist   = "quic,quics"
 };
@@ -246,7 +250,7 @@ const URLProtocol ff_bequics_protocol = {
     .url_close           = quic_close,
     .url_get_file_handle = quic_get_file_handle,
     .priv_data_size      = sizeof(BeQuicContext),
-    .priv_data_class     = &bequic_class,
+    .priv_data_class     = &quics_context_class,
     .flags               = URL_PROTOCOL_FLAG_NETWORK,
     .default_whitelist   = "quic,quics"
 };
