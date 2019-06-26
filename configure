@@ -306,6 +306,7 @@ External library support:
   --enable-opengl          enable OpenGL rendering [no]
   --enable-openssl         enable openssl, needed for https support
                            if gnutls, libtls or mbedtls is not used [no]
+  --enable-libcronet       enable libcronet [no]
   --disable-sndio          disable sndio support [autodetect]
   --disable-schannel       disable SChannel SSP, needed for TLS support on
                            Windows if openssl and gnutls are not used [autodetect]
@@ -1761,6 +1762,7 @@ EXTERNAL_LIBRARY_LIST="
     openal
     opengl
     vapoursynth
+    libcronet
 "
 
 HWACCEL_AUTODETECT_LIBRARY_LIST="
@@ -3346,6 +3348,7 @@ libsrt_protocol_deps="libsrt"
 libsrt_protocol_select="network"
 libssh_protocol_deps="libssh"
 libtls_conflict="openssl gnutls mbedtls"
+libcronet_protocol_deps="libcronet"
 
 # filters
 afftdn_filter_deps="avcodec"
@@ -6148,6 +6151,7 @@ enabled libvmaf           && require_pkg_config libvmaf "libvmaf >= 1.3.9" libvm
 enabled libvo_amrwbenc    && require libvo_amrwbenc vo-amrwbenc/enc_if.h E_IF_init -lvo-amrwbenc
 enabled libvorbis         && require_pkg_config libvorbis vorbis vorbis/codec.h vorbis_info_init &&
                              require_pkg_config libvorbisenc vorbisenc vorbis/vorbisenc.h vorbis_encode_init
+enable libcronet          && require libcronet cronet_c.h Cronet_Engine_Create -lcronet.73.0.3683.75
 
 enabled libvpx            && {
     enabled libvpx_vp8_decoder && {
