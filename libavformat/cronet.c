@@ -33,6 +33,7 @@ typedef struct CronetContext {
 #define E AV_OPT_FLAG_ENCODING_PARAM
 #define CRONET_DEFAULT_BUFFER_SIZE 524288
 #define CRONET_MAX_BUFFER_SIZE  33554432
+#define CRONET_HTTP_HEADER_SIZE 128
 
 static const AVOption options[] = {
     { "timeout",        "Timeout in ms.",              OFFSET(timeout),        AV_OPT_TYPE_INT,     { .i64 = -1 },                           -1,  INT_MAX,      .flags = D|E },
@@ -56,7 +57,9 @@ CRONET_CLASS(cronets);
 typedef enum CronetTaskType {
     kCronetTaskType_Runnable = 0,
     kCronetTaskType_FF_Open,
-    kCronetTaskType_FF_Close
+    kCronetTaskType_FF_Close,
+    kCronetTaskType_FF_Reset,
+    kCronetTaskType_FF_Range
 } CronetTaskType;
 
 typedef struct CronetTask {
@@ -64,6 +67,8 @@ typedef struct CronetTask {
     Cronet_RunnablePtr  runnable;
     URLContext          *url_context;
     char                *url;
+    int64_t             start;
+    int64_t             end;
     struct CronetTask   *next;
 } CronetTask;
 
@@ -160,6 +165,19 @@ static CronetTask* create_open_task(URLContext *url_context, const char *url) {
 
 static CronetTask* create_close_task(URLContext *url_context) {
     return create_context_task(kCronetTaskType_FF_Close, url_context);
+}
+
+static CronetTask* create_reset_task(URLContext *url_context) {
+    return create_context_task(kCronetTaskType_FF_Reset, url_context);
+}
+
+static CronetTask* create_range_task(URLContext *url_context,
+                                     int64_t start,
+                                     int64_t end) {
+    CronetTask *task    = create_context_task(kCronetTaskType_FF_Range, url_context);
+    task->start         = start;
+    task->end           = end;
+    return task;
 }
 
 static void destroy_task(CronetTask *task) {
@@ -484,6 +502,157 @@ static void process_close_task(URLContext *h) {
     }
 }
 
+static void process_reset_task(URLContext *h) {
+    int ret             = 0;
+    int do_cancel       = 0;
+    CronetContext *s    = NULL;
+    do {
+        if (cronet_runtime_context == NULL) {
+            return;
+        }
+
+        if (h == NULL || h->priv_data == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        s = h->priv_data;
+        if (s->fifo == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        if (s->request != NULL) {
+            Cronet_UrlRequest_Cancel(s->request);
+            do_cancel = 1;
+            av_log(h, AV_LOG_INFO, "Canceling.\n");
+        }
+
+        s->read_pos     = 0;
+        s->write_pos    = 0;
+        s->is_open      = 0;
+
+        av_fifo_reset(s->fifo);
+    } while (0);
+
+    if (!do_cancel) {
+        post_return_value(ret);
+    }
+}
+
+static void process_range_task(URLContext *h, int64_t start, int64_t end) {
+    CronetContext *s = NULL;
+    Cronet_RESULT result = Cronet_RESULT_SUCCESS;
+    Cronet_UrlRequestParamsPtr request_params = NULL;
+    Cronet_HttpHeaderPtr header = NULL;
+    char range_header[CRONET_HTTP_HEADER_SIZE] = {0};
+    int ret = 0;
+
+    do {
+        if (cronet_runtime_context == NULL) {
+            return;
+        }
+
+        if (cronet_runtime_context->engine == NULL ||
+            cronet_runtime_context->executor == NULL) {
+            ret = AVERROR_UNKNOWN;
+            break;
+        }
+
+        if (h == NULL || h->priv_data == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        if (end >= start) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        s = h->priv_data;
+
+        // Setup callback.
+        s->callback = Cronet_UrlRequestCallback_CreateWith(on_redirect_received,
+                                                           on_response_started,
+                                                           on_read_completed,
+                                                           on_succeeded,
+                                                           on_failed,
+                                                           on_canceled,
+                                                           on_metrics_collected);
+        Cronet_UrlRequestCallback_SetClientContext(s->callback, h);
+
+        // Setup request.
+        s->request = Cronet_UrlRequest_Create();
+
+        // Setup request param.
+        request_params = Cronet_UrlRequestParams_Create();
+
+        // Set method.
+        Cronet_UrlRequestParams_http_method_set(request_params, "GET");
+
+        // Set range header.
+        header = Cronet_HttpHeader_Create();
+        Cronet_HttpHeader_name_set(header, "Range");
+        if (end != -1) {
+            av_strlcatf(range_header, sizeof(range_header), "bytes=%"PRIu64"-%"PRIu64, start, end);
+        } else {
+            av_strlcatf(range_header, sizeof(range_header), "bytes=%"PRIu64"-", start);
+        }
+        Cronet_HttpHeader_value_set(header, range_header);
+        Cronet_UrlRequestParams_request_headers_add(request_params, header);
+
+        result = Cronet_UrlRequest_InitWithParams(s->request,
+                                                  cronet_runtime_context->engine,
+                                                  s->location,
+                                                  request_params,
+                                                  s->callback,
+                                                  cronet_runtime_context->executor);
+        if (result != Cronet_RESULT_SUCCESS) {
+            av_log(h,
+                   AV_LOG_ERROR,
+                   "Cronet_UrlRequest_InitWithParams error %d.\n", result);
+            ret = AVERROR_UNKNOWN;
+            break;
+        }
+
+        // Starting request.
+        result = Cronet_UrlRequest_Start(s->request);
+        if (result != Cronet_RESULT_SUCCESS) {
+            av_log(h,
+                   AV_LOG_ERROR,
+                   "Cronet_UrlRequest_Start error %d.\n", result);
+            ret = AVERROR_UNKNOWN;
+            break;
+        }
+
+        s->read_pos     = start;
+        s->write_pos    = start;
+        s->is_open      = 1;
+    } while (0);
+
+    if (ret != 0) {
+        if (s->request != NULL) {
+            Cronet_UrlRequest_Destroy(s->request);
+            s->request = NULL;
+        }
+
+        if (s->callback != NULL) {
+            Cronet_UrlRequestCallback_Destroy(s->callback);
+            s->callback = NULL;
+        }
+    }
+
+    if (request_params != NULL) {
+        Cronet_UrlRequestParams_Destroy(request_params);
+    }
+
+    if (header != NULL) {
+        Cronet_HttpHeader_Destroy(header);
+    }
+
+    post_return_value(ret);
+}
+
 static void process_task(CronetTask *task) {
     if (task == NULL) {
         return;
@@ -498,6 +667,12 @@ static void process_task(CronetTask *task) {
             break;
         case kCronetTaskType_FF_Close:
             process_close_task(task->url_context);
+            break;
+        case kCronetTaskType_FF_Reset:
+            process_reset_task(task->url_context);
+            break;
+        case kCronetTaskType_FF_Range:
+            process_range_task(task->url_context, task->start, task->end);
             break;
         default:
             break;
@@ -1049,8 +1224,22 @@ static int cronet_write(URLContext *h, const uint8_t *buf, int size) {
     return AVERROR(ENOSYS);
 }
 
+static int request_range(URLContext *h, int64_t start, int64_t end) {
+    int ret = -1;
+    do {
+        ret = invoke_task(create_reset_task(h));
+        if (ret != 0) {
+            break;
+        }
+
+        ret = invoke_task(create_range_task(h, start, end));
+    } while (0);
+    return ret;
+}
+
 static int64_t cronet_seek(URLContext *h, int64_t off, int whence) {
-    int64_t ret = -1;
+    int64_t ret         = -1;
+    int seek_from_net   = 0;
     CronetContext *s = h->priv_data;
     pthread_mutex_lock(&s->fifo_mutex);
     do {
@@ -1093,19 +1282,24 @@ static int64_t cronet_seek(URLContext *h, int64_t off, int whence) {
             break;
         }
 
-        if (off > s->read_pos && off < s->write_pos) {
-            // Seek in buffer, drop some data.
-            av_fifo_drain(s->fifo, off - s->read_pos);
-        } else if (off < s->read_pos || off >= s->write_pos) {
-            // TBD, seek from net.
-        }
+        ret = off;
 
-        // Update read_pos.
-        s->read_pos = off;
-        ret         = off;
+        // Check seek from buffer or net.
+        if (off > s->read_pos && off < s->write_pos) {
+            av_fifo_drain(s->fifo, off - s->read_pos);
+            s->read_pos = off;
+        } else if (off < s->read_pos || off >= s->write_pos) {
+            seek_from_net = 1;
+            break;
+        }
     } while (0);
-    av_log(h, AV_LOG_INFO, "seek return %lld.\n", ret);
     pthread_mutex_unlock(&s->fifo_mutex);
+
+    if (seek_from_net && request_range(h, off, -1) != 0) {
+        ret = AVERROR(EINVAL);
+    }
+
+    av_log(h, AV_LOG_INFO, "seek return %lld.\n", ret);
     return ret;
 }
 
