@@ -6,7 +6,7 @@ CPU=armv7-a
 PREFIX=$(pwd)/android/$CPU
 EXTRA_CFLAGS="-Os -fpic -DANDROID -D__thumb__ -mthumb -mfloat-abi=softfp -mfpu=vfp -march=$CPU -D__ANDROID_API__=21 -D__GLIBC_HAVE_LONG_LONG"
 EXTRA_LDFLAGS="-march=$CPU "
-CRONET_INCLUDE_FLAG="-I/home/hezhen/google/chromium/src/components/cronet/native/include -I/home/hezhen/google/chromium/src/components/cronet/native/generated"
+CRONET_INCLUDE_FLAG="-I/home/hezhen/google/CronetTestAndroid/cronet_c_headers"
 CRONET_LIB_DIR="/home/hezhen/google/chromium/src/out/Release/cronet/libs/armeabi-v7a"
 CRONET_LIB_FLAG="-L$CRONET_LIB_DIR"
 
