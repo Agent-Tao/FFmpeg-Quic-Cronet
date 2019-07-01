@@ -18,12 +18,14 @@ cd build
 make
 make install
 ```
+
 ### Android
 * Edit build_android.sh, modify cronet include and library search path.
 * Then run command:
 ```
 ./build_android.sh
 ```
+
 ### iOS
 * Follow [FFmpeg-iOS-build-script](https://github.com/kewlbear/FFmpeg-iOS-build-script), install gas-preprocessor and yasm;
 * Copy build_ios.sh out from source directory:
