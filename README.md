@@ -4,6 +4,38 @@ FFmpeg README
 FFmpeg is a collection of libraries and tools to process multimedia content
 such as audio, video, subtitles and related metadata.
 
+## Build For Cronet
+### Windows
+```
+mkdir build
+cd build
+../configure --prefix=/INSTALL/PATH --disable-static --enable-shared \
+             --enable-gpl --enable-version3 --enable-sdl --disable-mmx \
+             --disable-stripping --arch=x86 --enable-libcronet \
+             --extra-cflags=-I/CRONET/INCLUDE/PATH \
+             --extra-ldflags=-L/CRONET/LIBRARY/PATH \
+             --extra-libs=-lcronet.73.0.3683.75
+make
+make install
+```
+### Android
+* Edit build_android.sh, modify cronet include and library search path.
+* Then run command:
+```
+./build_android.sh
+```
+### iOS
+* Follow [FFmpeg-iOS-build-script](https://github.com/kewlbear/FFmpeg-iOS-build-script), install gas-preprocessor and yasm;
+* Copy build_ios.sh out from source directory:
+```
+copy build_ios.sh ..
+```
+* Edit build_ios.sh, modify cronet include and library search path.
+* Then run command:
+```
+./build_ios.sh arm64
+```
+
 ## Libraries
 
 * `libavcodec` provides implementation of a wider range of codecs.
