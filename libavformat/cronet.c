@@ -9,6 +9,8 @@
 #include <cronet_c.h>
 #include <pthread.h>
 
+struct CronetTask;
+
 typedef struct CronetContext {
     const AVClass *class;
     int timeout;
@@ -25,6 +27,7 @@ typedef struct CronetContext {
     int64_t write_pos;  // Current write offset in file of current request.
     Cronet_UrlRequestPtr request;
     Cronet_UrlRequestCallbackPtr callback;
+    struct CronetTask *closing_task;
     int is_open;
 } CronetContext;
 
@@ -69,6 +72,10 @@ typedef struct CronetTask {
     char                *url;
     int64_t             start;
     int64_t             end;
+    pthread_mutex_t     invoke_mutex;
+    pthread_cond_t      invoke_cond;
+    int                 invoke_returned;
+    int                 invoke_return_value;
     struct CronetTask   *next;
 } CronetTask;
 
@@ -85,10 +92,6 @@ typedef struct CronetRuntimeContext {
     pthread_mutex_t     executor_task_mutex;
     pthread_cond_t      executor_task_cond;
     CronetTaskQueue     executor_task_queue;
-    pthread_mutex_t     executor_invoke_mutex;
-    pthread_cond_t      executor_invoke_cond;
-    int                 executor_invoke_returned;
-    int                 executor_invoke_return_value;
     int                 executor_stop_thread_loop;
 #ifdef _WIN32
     Cronet_ComInitializerPtr com_initializer;
@@ -141,6 +144,9 @@ static void on_metrics_collected(Cronet_UrlRequestCallbackPtr self,
 static CronetTask* create_task(CronetTaskType type) {
     CronetTask *task    = av_mallocz(sizeof(CronetTask));
     task->type          = type;
+
+    pthread_mutex_init(&task->invoke_mutex, NULL);
+    pthread_cond_init(&task->invoke_cond, NULL);
     return task;
 }
 
@@ -192,6 +198,9 @@ static void destroy_task(CronetTask *task) {
     if (task->url != NULL) {
         av_freep(&task->url);
     }
+
+    pthread_mutex_destroy(&task->invoke_mutex);
+    pthread_cond_destroy(&task->invoke_cond);
 
     av_free(task);
 }
@@ -283,55 +292,63 @@ static int invoke_task(CronetTask *task) {
     pthread_mutex_unlock(&cronet_runtime_context->executor_task_mutex);
 
     // Wait for return value.
-    pthread_mutex_lock(&cronet_runtime_context->executor_invoke_mutex);
-    while (posted && !cronet_runtime_context->executor_invoke_returned) {
-        pthread_cond_wait(&cronet_runtime_context->executor_invoke_cond,
-                          &cronet_runtime_context->executor_invoke_mutex);
+    pthread_mutex_lock(&task->invoke_mutex);
+    while (posted && !task->invoke_returned) {
+        pthread_cond_wait(&task->invoke_cond,
+                          &task->invoke_mutex);
     }
+    pthread_mutex_unlock(&task->invoke_mutex);
 
     if (posted) {
-        ret = cronet_runtime_context->executor_invoke_return_value;
-        cronet_runtime_context->executor_invoke_returned = 0;
-    } else {
-        destroy_task(task);
+        ret = task->invoke_return_value;
     }
-    pthread_mutex_unlock(&cronet_runtime_context->executor_invoke_mutex);
 
+    destroy_task(task);
     return ret;
 }
 
-static void post_return_value(int ret) {
-    if (cronet_runtime_context == NULL) {
+static void post_return_value(CronetTask *task, int ret) {
+    if (task == NULL || cronet_runtime_context == NULL) {
         return;
     }
 
-    pthread_mutex_lock(&cronet_runtime_context->executor_invoke_mutex);
-    cronet_runtime_context->executor_invoke_returned = 1;
-    cronet_runtime_context->executor_invoke_return_value = ret;
-    pthread_cond_signal(&cronet_runtime_context->executor_invoke_cond);
-    pthread_mutex_unlock(&cronet_runtime_context->executor_invoke_mutex);
+    pthread_mutex_lock(&task->invoke_mutex);
+    task->invoke_returned       = 1;
+    task->invoke_return_value   = ret;
+    pthread_cond_signal(&task->invoke_cond);
+    pthread_mutex_unlock(&task->invoke_mutex);
 }
 
-static void process_runnable_task(Cronet_RunnablePtr runnable) {
+static void process_runnable_task(CronetTask *task) {
+    Cronet_RunnablePtr runnable = NULL;
+    if (task == NULL) {
+        return;
+    }
+
+    runnable = task->runnable;
     if (runnable != NULL) {
         Cronet_Runnable_Run(runnable);
     }
+
+    destroy_task(task);
 }
 
-static void process_open_task(URLContext *h, const char *uri) {
-    char *url = NULL;
-    int url_len = 0;
-    const char *http_scheme = "http://";
-    const char *https_scheme = "https://";
-    const char *scheme = NULL;
-    const char *deli = "://";
-    char *p = NULL;
-    char hostname[1024] = {0};
-    char protocol[1024] = {0};
-    char path[1024] = {0};
-    int port = 0;
-    CronetContext *s = NULL;
-    Cronet_RESULT result = Cronet_RESULT_SUCCESS;
+static void process_open_task(CronetTask *task) {
+    URLContext *h               = NULL;
+    CronetContext *s            = NULL;
+    const char *uri             = NULL;
+    char *url                   = NULL;
+    int url_len                 = 0;
+    const char *http_scheme     = "http://";
+    const char *https_scheme    = "https://";
+    const char *scheme          = NULL;
+    const char *deli            = "://";
+    char *p                     = NULL;
+    char hostname[1024]         = {0};
+    char protocol[1024]         = {0};
+    char path[1024]             = {0};
+    int port                    = 0;
+    Cronet_RESULT result        = Cronet_RESULT_SUCCESS;
     Cronet_UrlRequestParamsPtr request_params = NULL;
     int ret = 0;
 
@@ -345,6 +362,14 @@ static void process_open_task(URLContext *h, const char *uri) {
             ret = AVERROR_UNKNOWN;
             break;
         }
+
+        if (task == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        h   = task->url_context;
+        uri = task->url;
 
         if (h == NULL || h->priv_data == NULL || uri == NULL) {
             ret = AVERROR(EINVAL);
@@ -458,17 +483,25 @@ static void process_open_task(URLContext *h, const char *uri) {
         av_free(url);
     }
 
-    post_return_value(ret);
+    post_return_value(task, ret);
 }
 
-static void process_close_task(URLContext *h) {
+static void process_close_task(CronetTask *task) {
+    URLContext *h       = NULL;
+    CronetContext *s    = NULL;
     int ret             = 0;
     int do_cancel       = 0;
-    CronetContext *s    = NULL;
     do {
         if (cronet_runtime_context == NULL) {
             return;
         }
+
+        if (task == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        h = task->url_context;
 
         if (h == NULL || h->priv_data == NULL) {
             ret = AVERROR(EINVAL);
@@ -476,11 +509,19 @@ static void process_close_task(URLContext *h) {
         }
 
         s = h->priv_data;
+        if (!s->is_open) {
+            break;
+        }
 
         if (s->request != NULL) {
-            Cronet_UrlRequest_Cancel(s->request);
-            do_cancel = 1;
-            av_log(h, AV_LOG_INFO, "Canceling.\n");
+            if (s->closing_task == NULL) {
+                Cronet_UrlRequest_Cancel(s->request);
+                s->closing_task = task;
+                do_cancel = 1;
+            } else {
+                // Already closing, just return.
+                break;
+            }
         }
 
         if (s->fifo != NULL) {
@@ -494,22 +535,33 @@ static void process_close_task(URLContext *h) {
         s->read_pos     = 0;
         s->write_pos    = 0;
         s->is_open      = 0;
-        av_freep(&s->location);
+
+        if (s->location != NULL) {
+            av_freep(&s->location);
+        }
     } while (0);
 
     if (!do_cancel) {
-        post_return_value(ret);
+        post_return_value(task, ret);
     }
 }
 
-static void process_reset_task(URLContext *h) {
+static void process_reset_task(CronetTask *task) {
+    URLContext *h       = NULL;
+    CronetContext *s    = NULL;
     int ret             = 0;
     int do_cancel       = 0;
-    CronetContext *s    = NULL;
     do {
         if (cronet_runtime_context == NULL) {
             return;
         }
+
+        if (task == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        h = task->url_context;
 
         if (h == NULL || h->priv_data == NULL) {
             ret = AVERROR(EINVAL);
@@ -517,15 +569,24 @@ static void process_reset_task(URLContext *h) {
         }
 
         s = h->priv_data;
+        if (!s->is_open) {
+            break;
+        }
+
         if (s->fifo == NULL) {
             ret = AVERROR(EINVAL);
             break;
         }
 
         if (s->request != NULL) {
-            Cronet_UrlRequest_Cancel(s->request);
-            do_cancel = 1;
-            av_log(h, AV_LOG_INFO, "Canceling.\n");
+            if (s->closing_task == NULL) {
+                Cronet_UrlRequest_Cancel(s->request);
+                s->closing_task = task;
+                do_cancel = 1;
+            } else {
+                // Already closing, just return.
+                break;
+            }
         }
 
         s->read_pos     = 0;
@@ -536,13 +597,16 @@ static void process_reset_task(URLContext *h) {
     } while (0);
 
     if (!do_cancel) {
-        post_return_value(ret);
+        post_return_value(task, ret);
     }
 }
 
-static void process_range_task(URLContext *h, int64_t start, int64_t end) {
-    CronetContext *s = NULL;
-    Cronet_RESULT result = Cronet_RESULT_SUCCESS;
+static void process_range_task(CronetTask *task) {
+    URLContext *h           = NULL;
+    CronetContext *s        = NULL;
+    int64_t start           = 0;
+    int64_t end             = 0;
+    Cronet_RESULT result    = Cronet_RESULT_SUCCESS;
     Cronet_UrlRequestParamsPtr request_params = NULL;
     Cronet_HttpHeaderPtr header = NULL;
     char range_header[CRONET_HTTP_HEADER_SIZE] = {0};
@@ -558,6 +622,15 @@ static void process_range_task(URLContext *h, int64_t start, int64_t end) {
             ret = AVERROR_UNKNOWN;
             break;
         }
+
+        if (task == NULL) {
+            ret = AVERROR(EINVAL);
+            break;
+        }
+
+        h       = task->url_context;
+        start   = task->start;
+        end     = task->end;
 
         if (h == NULL || h->priv_data == NULL) {
             ret = AVERROR(EINVAL);
@@ -650,7 +723,7 @@ static void process_range_task(URLContext *h, int64_t start, int64_t end) {
         Cronet_HttpHeader_Destroy(header);
     }
 
-    post_return_value(ret);
+    post_return_value(task, ret);
 }
 
 static void process_task(CronetTask *task) {
@@ -660,25 +733,23 @@ static void process_task(CronetTask *task) {
 
     switch (task->type) {
         case kCronetTaskType_Runnable:
-            process_runnable_task(task->runnable);
+            process_runnable_task(task);
             break;
         case kCronetTaskType_FF_Open:
-            process_open_task(task->url_context, task->url);
+            process_open_task(task);
             break;
         case kCronetTaskType_FF_Close:
-            process_close_task(task->url_context);
+            process_close_task(task);
             break;
         case kCronetTaskType_FF_Reset:
-            process_reset_task(task->url_context);
+            process_reset_task(task);
             break;
         case kCronetTaskType_FF_Range:
-            process_range_task(task->url_context, task->start, task->end);
+            process_range_task(task);
             break;
         default:
             break;
     }
-
-    destroy_task(task);
 }
 
 static void cronet_execute(Cronet_ExecutorPtr self, Cronet_RunnablePtr runnable) {
@@ -779,7 +850,6 @@ int av_format_cronet_init(const char *dns_config_server) {
         // Alloc CronetRuntimeContext.
         cronet_runtime_context = av_mallocz(sizeof(CronetRuntimeContext));
         cronet_runtime_context->executor_stop_thread_loop   = false;
-        cronet_runtime_context->executor_invoke_returned    = 0;
 
         //Setup Cronet_Engine.
         cronet_runtime_context->engine = create_cronet_engine(dns_config_server);
@@ -798,10 +868,6 @@ int av_format_cronet_init(const char *dns_config_server) {
         pthread_mutex_init(&cronet_runtime_context->executor_task_mutex, NULL);
         pthread_cond_init(&cronet_runtime_context->executor_task_cond, NULL);
 
-        // Initialize executor invoke mutex and condition variable.
-        pthread_mutex_init(&cronet_runtime_context->executor_invoke_mutex, NULL);
-        pthread_cond_init(&cronet_runtime_context->executor_invoke_cond, NULL);
-
         // Initialize task queue.
         cronet_init_task_queue(&cronet_runtime_context->executor_task_queue);
 
@@ -813,8 +879,6 @@ int av_format_cronet_init(const char *dns_config_server) {
         if (ret) {
             av_log(NULL, AV_LOG_ERROR, "Cronet pthread_create fail.\n");
             cronet_uninit_task_queue(&cronet_runtime_context->executor_task_queue);
-            pthread_mutex_destroy(&cronet_runtime_context->executor_invoke_mutex);
-            pthread_cond_destroy(&cronet_runtime_context->executor_invoke_cond);
             pthread_mutex_destroy(&cronet_runtime_context->executor_task_mutex);
             pthread_cond_destroy(&cronet_runtime_context->executor_task_cond);
             ret = AVERROR(ret);
@@ -856,10 +920,6 @@ void av_format_cronet_uninit(void) {
     // Destroy executor task mutex and condition variable.
     pthread_mutex_destroy(&cronet_runtime_context->executor_task_mutex);
     pthread_cond_destroy(&cronet_runtime_context->executor_task_cond);
-
-    // Destroy executor invoke mutex and condition variable.
-    pthread_mutex_destroy(&cronet_runtime_context->executor_invoke_mutex);
-    pthread_cond_destroy(&cronet_runtime_context->executor_invoke_cond);
 
     // Destroy Cronet_Executor 
     if (cronet_runtime_context->executor != NULL) {
@@ -1143,10 +1203,9 @@ static void on_canceled(Cronet_UrlRequestCallbackPtr self,
         }
 
         s->is_open = 0;
+        post_return_value(s->closing_task, 0);
+        s->closing_task = NULL;
     } while (0);
-
-    // Post here.
-    post_return_value(0);
 }
 
 static void on_metrics_collected(Cronet_UrlRequestCallbackPtr self,
@@ -1299,7 +1358,7 @@ static int64_t cronet_seek(URLContext *h, int64_t off, int whence) {
         ret = AVERROR(EINVAL);
     }
 
-    av_log(h, AV_LOG_INFO, "seek return %lld.\n", ret);
+    //av_log(h, AV_LOG_INFO, "seek return %lld.\n", ret);
     return ret;
 }
 
