@@ -2072,7 +2072,7 @@ int avformat_network_init(void);
  *
  * @return Error code.
  */
-int av_format_cronet_init(const char *dns_config_server);
+int av_format_cronet_init(const char *dns_config_server, const char *dns_default_server);
 
 /**
  * Uninitialize cronet environment.
