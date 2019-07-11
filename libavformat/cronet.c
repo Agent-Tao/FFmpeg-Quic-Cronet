@@ -1137,8 +1137,6 @@ static void on_succeeded(Cronet_UrlRequestCallbackPtr self,
             Cronet_UrlRequestCallback_Destroy(s->callback);
             s->callback = NULL;
         }
-
-        s->is_open = 0;
     } while (0);
 
     av_log(h, AV_LOG_INFO, "Cronet request success.\n");
@@ -1216,7 +1214,8 @@ static void on_canceled(Cronet_UrlRequestCallbackPtr self,
 static void on_metrics_collected(Cronet_UrlRequestCallbackPtr self,
                                  Cronet_UrlRequestPtr request,
                                  Cronet_String metrics) {
-    // Do nothing.
+    // Do nothing
+    //av_log(NULL, AV_LOG_INFO, "on_metrics_collected %s.\n", metrics);
 }
 
 static int cronet_open(URLContext *h, const char *uri, int flags) {

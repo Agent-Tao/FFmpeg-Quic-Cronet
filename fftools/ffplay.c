@@ -3688,7 +3688,8 @@ int main(int argc, char **argv)
     init_dynload();
 
 #if CONFIG_LIBCRONET
-    av_format_cronet_init("http://httpdns.sohucs.com/com.sohu.sohuvideo/v0.1.0");
+    av_format_cronet_init("http://httpdns.sohucs.com/com.sohu.sohuvideo/v0.1.0",
+                          "http://211.159.191.191/dns/get-dns?domain=");
 #endif
 
     av_log_set_flags(AV_LOG_SKIP_REPEATED);
