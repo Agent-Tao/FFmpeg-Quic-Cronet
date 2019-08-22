@@ -141,7 +141,7 @@ then
 		    --cc="$CC" \
 		    --as="$AS" \
 		    $CONFIGURE_FLAGS \
-		    --extra-cflags="$CFLAGS -I/Users/testtest/hezhen/CroneTest/Cronet.framework/Headers" \
+		    --extra-cflags="$CFLAGS -I/Users/testtest/hezhen/CroneTest/Cronet/Dynamic/Cronet.framework/Headers" \
 		    --extra-ldflags="$LDFLAGS -Xlinker -objc_abi_version -Xlinker 2 -arch $ARCH -Werror -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS12.1.sdk -stdlib=libc++ -miphoneos-version-min=9.0 -Wl,-ObjC -F /Users/testtest/hezhen/google/chromium/src/out/Release" \
                     --extra-libs="-framework UIKit -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework Cronet" \
 		    --prefix="$THIN/$ARCH" \
