@@ -1008,6 +1008,15 @@ static int process_headers(URLContext *h, Cronet_UrlResponseInfoPtr info) {
     return 1;
 }
 
+static void stop_read(CronetContext *s) {
+    if (s != NULL) {
+        pthread_mutex_lock(&s->fifo_mutex);
+        s->is_open = 0;
+        pthread_cond_signal(&s->fifo_cond);
+        pthread_mutex_unlock(&s->fifo_mutex);
+    }
+}
+
 // Implementation of Cronet_UrlRequestCallback methods.
 static void on_redirect_received(Cronet_UrlRequestCallbackPtr self,
                                  Cronet_UrlRequestPtr request,
@@ -1137,6 +1146,8 @@ static void on_succeeded(Cronet_UrlRequestCallbackPtr self,
             Cronet_UrlRequestCallback_Destroy(s->callback);
             s->callback = NULL;
         }
+
+        stop_read(s);
     } while (0);
 
     av_log(h, AV_LOG_INFO, "Cronet request success.\n");
@@ -1169,7 +1180,7 @@ static void on_failed(Cronet_UrlRequestCallbackPtr self,
             s->callback = NULL;
         }
 
-        s->is_open = 0;
+        stop_read(s);
     } while (0);
 
     av_log(h,
@@ -1205,7 +1216,7 @@ static void on_canceled(Cronet_UrlRequestCallbackPtr self,
             s->callback = NULL;
         }
 
-        s->is_open = 0;
+        stop_read(s);
         post_return_value(s->closing_task, 0);
         s->closing_task = NULL;
     } while (0);
@@ -1244,7 +1255,7 @@ static int cronet_read(URLContext *h, uint8_t *buf, int size) {
     CronetContext *s    = h->priv_data;
     pthread_mutex_lock(&s->fifo_mutex);
     do {
-        if (!s->is_open || s->fifo == NULL) {
+        if (s->fifo == NULL) {
             ret = AVERROR_UNKNOWN;
             break;
         }
@@ -1267,8 +1278,16 @@ static int cronet_read(URLContext *h, uint8_t *buf, int size) {
 
         // Otherwise, wait for data.
         if (s->timeout == -1) {
+            if (s->is_open == 0) {
+                ret = AVERROR_EOF;
+                break;
+            }
             pthread_cond_wait(&s->fifo_cond, &s->fifo_mutex);
         } else {
+            if (s->is_open == 0) {
+                ret = AVERROR_EOF;
+                break;
+            }
             int64_t t = av_gettime() + s->timeout * 1000;
             struct timespec tv = { .tv_sec  =  t / 1000000,
                                    .tv_nsec = (t % 1000000) * 1000 };
