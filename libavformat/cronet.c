@@ -141,6 +141,8 @@ static void on_metrics_collected(Cronet_UrlRequestCallbackPtr self,
                                  Cronet_UrlRequestPtr request,
                                  Cronet_String metrics);
 
+static void stop_read(CronetContext *s);
+
 static CronetTask* create_task(CronetTaskType type) {
     CronetTask *task    = av_mallocz(sizeof(CronetTask));
     task->type          = type;
@@ -509,9 +511,7 @@ static void process_close_task(CronetTask *task) {
         }
 
         s = h->priv_data;
-        if (!s->is_open) {
-            break;
-        }
+        stop_read(s);
 
         if (s->request != NULL) {
             if (s->closing_task == NULL) {
@@ -569,9 +569,7 @@ static void process_reset_task(CronetTask *task) {
         }
 
         s = h->priv_data;
-        if (!s->is_open) {
-            break;
-        }
+        stop_read(s);
 
         if (s->fifo == NULL) {
             ret = AVERROR(EINVAL);
@@ -1216,7 +1214,7 @@ static void on_canceled(Cronet_UrlRequestCallbackPtr self,
             s->callback = NULL;
         }
 
-        stop_read(s);
+        s->is_open = false;
         post_return_value(s->closing_task, 0);
         s->closing_task = NULL;
     } while (0);
@@ -1253,13 +1251,13 @@ static int cronet_read(URLContext *h, uint8_t *buf, int size) {
     int ret             = 0;
     int avail           = 0;
     CronetContext *s    = h->priv_data;
+
+    if (s->fifo == NULL) {
+        return AVERROR_UNKNOWN;
+    }
+
     pthread_mutex_lock(&s->fifo_mutex);
     do {
-        if (s->fifo == NULL) {
-            ret = AVERROR_UNKNOWN;
-            break;
-        }
-
         if (s->file_size != UINT64_MAX && s->read_pos >= s->file_size) {
             ret = AVERROR_EOF;
             break;
@@ -1276,18 +1274,15 @@ static int cronet_read(URLContext *h, uint8_t *buf, int size) {
             break;
         }
 
+        if (s->is_open == 0) {
+            ret = AVERROR_EOF;
+            break;
+        }
+
         // Otherwise, wait for data.
         if (s->timeout == -1) {
-            if (s->is_open == 0) {
-                ret = AVERROR_EOF;
-                break;
-            }
             pthread_cond_wait(&s->fifo_cond, &s->fifo_mutex);
         } else {
-            if (s->is_open == 0) {
-                ret = AVERROR_EOF;
-                break;
-            }
             int64_t t = av_gettime() + s->timeout * 1000;
             struct timespec tv = { .tv_sec  =  t / 1000000,
                                    .tv_nsec = (t % 1000000) * 1000 };
@@ -1325,7 +1320,7 @@ static int64_t cronet_seek(URLContext *h, int64_t off, int whence) {
     CronetContext *s = h->priv_data;
     pthread_mutex_lock(&s->fifo_mutex);
     do {
-        if (!s->is_open || s->fifo == NULL) {
+        if (s->fifo == NULL) {
             ret = AVERROR_UNKNOWN;
             break;
         }
