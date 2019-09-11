@@ -10,7 +10,7 @@ Cronet是Chromium的网络库，封装了HTTP/HTTP2/QUIC等协议。在我的博
 ```
 ninja -c cronet_package
 ```
-Cronet集成到FFmpeg中的方法与bequic模块类似，这里也采用了添加协议的办法，其前置步骤仍然可以参考[FFmpeg支持QUIC](https://blog.csdn.net/sonysuqin/article/details/89022250)。
+Cronet集成到FFmpeg中的方法与bequic模块类似，这里也采用了添加协议的办法，其前置步骤仍然可以参考[FFmpeg支持QUIC](https://blog.csdn.net/sonysuqin/article/details/89022250)中FFmpeg编译相关的章节。
 
 ### Windows
 ```
