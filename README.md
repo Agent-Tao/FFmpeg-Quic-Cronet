@@ -5,6 +5,12 @@ FFmpeg is a collection of libraries and tools to process multimedia content
 such as audio, video, subtitles and related metadata.
 
 ## Build For Cronet
+### Cronet
+在我的博客文章[FFmpeg支持QUIC](https://blog.csdn.net/sonysuqin/article/details/89022250)中描述了在Chromium代码中增加一个bequic模块、编译、集成到FFmpeg中的过程，Cronet是Chromium的网络库，封装了HTTP/HTTP2/QUIC协议。编译Cronet过程也很简单，搭建好Chromium环境后运行以下命令即可。
+```
+ninja -c cronet_package
+```
+
 ### Windows
 ```
 mkdir build
