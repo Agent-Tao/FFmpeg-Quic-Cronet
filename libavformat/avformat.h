@@ -2067,12 +2067,9 @@ int avformat_network_init(void);
 #if CONFIG_LIBCRONET
 /**
  * Initialize cronet environment, must be called as early as possible.
- *
- * @param dns_config_server Sohu dns config server url.
- *
  * @return Error code.
  */
-int av_format_cronet_init(const char *dns_config_server, const char *dns_default_server);
+int av_format_cronet_init(void);
 
 /**
  * Uninitialize cronet environment.

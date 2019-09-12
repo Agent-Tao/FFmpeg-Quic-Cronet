@@ -1,5 +1,7 @@
 #!/bin/sh
 
+cd ..
+
 # directories
 FF_VERSION="4.1"
 #FF_VERSION="snapshot-git"
@@ -34,7 +36,8 @@ fi
 # avresample
 #CONFIGURE_FLAGS="$CONFIGURE_FLAGS --enable-avresample"
 
-ARCHS="arm64 armv7 x86_64 i386"
+#ARCHS="arm64 armv7 x86_64 i386"
+ARCHS="arm64"
 
 COMPILE="y"
 LIPO="y"
@@ -141,8 +144,8 @@ then
 		    --cc="$CC" \
 		    --as="$AS" \
 		    $CONFIGURE_FLAGS \
-		    --extra-cflags="$CFLAGS -I/Users/testtest/hezhen/CroneTest/Cronet/Dynamic/Cronet.framework/Headers" \
-		    --extra-ldflags="$LDFLAGS -Xlinker -objc_abi_version -Xlinker 2 -arch $ARCH -Werror -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS12.1.sdk -stdlib=libc++ -miphoneos-version-min=9.0 -Wl,-ObjC -F /Users/testtest/hezhen/google/chromium/src/out/Release" \
+		    --extra-cflags="$CFLAGS -I/Users/testtest/hezhen/CroneTest/Cronet.framework/Headers" \
+		    --extra-ldflags="$LDFLAGS -Xlinker -objc_abi_version -Xlinker 2 -arch $ARCH -Werror -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS12.4.sdk -stdlib=libc++ -miphoneos-version-min=9.0 -Wl,-ObjC -F /Users/testtest/hezhen/google/chromium/src/out/Release" \
                     --extra-libs="-framework UIKit -framework CoreFoundation -framework CoreGraphics -framework CoreText -framework Foundation -framework Cronet" \
 		    --prefix="$THIN/$ARCH" \
 		|| exit 1
