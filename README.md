@@ -6,7 +6,7 @@ such as audio, video, subtitles and related metadata.
 
 ## Build For Cronet
 ### Cronet
-介绍文档可以参考[《FFmpeg支持Cronet(Chromium网络库)》](https://blog.csdn.net/sonysuqin/article/details/100775951)
+介绍文档[《FFmpeg支持Cronet(Chromium网络库)》](https://blog.csdn.net/sonysuqin/article/details/100775951).
 
 ### Windows
 ```
