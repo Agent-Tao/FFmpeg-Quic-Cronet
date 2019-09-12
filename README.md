@@ -45,6 +45,9 @@ copy build_ios.sh ..
 ./build_ios.sh arm64
 ```
 
+### 测试
+./ffplay cronets://bee-live.net/video/mao.mp4
+
 ## Libraries
 
 * `libavcodec` provides implementation of a wider range of codecs.
