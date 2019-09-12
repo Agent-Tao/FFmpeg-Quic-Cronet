@@ -35,10 +35,6 @@ make install
 
 ### iOS
 * Follow [FFmpeg-iOS-build-script](https://github.com/kewlbear/FFmpeg-iOS-build-script), install gas-preprocessor and yasm;
-* Copy build_ios.sh out from source directory:
-```
-copy build_ios.sh ..
-```
 * Edit build_ios.sh, modify cronet include and library search path.
 * Then run command:
 ```
