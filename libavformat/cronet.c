@@ -806,7 +806,7 @@ static void *executor_thread_loop(void *arg) {
 }
 
 // Create cronet engine.
-static Cronet_EnginePtr create_cronet_engine(const char *dns_config_server, const char *dns_default_server) {
+static Cronet_EnginePtr create_cronet_engine() {
     Cronet_RESULT result                    = Cronet_RESULT_SUCCESS;
     Cronet_EnginePtr cronet_engine          = Cronet_Engine_Create();
     Cronet_EngineParamsPtr engine_params    = Cronet_EngineParams_Create();
@@ -817,16 +817,6 @@ static Cronet_EnginePtr create_cronet_engine(const char *dns_config_server, cons
 
     // Enable QUIC.
     Cronet_EngineParams_enable_quic_set(engine_params,  1);
-
-    // Set sohu dns config server.
-    if (dns_config_server != NULL) {
-        Cronet_EngineParams_sohu_dns_config_server_set(engine_params, dns_config_server);
-    }
-
-    // Set sohu http dns default server.
-    if (dns_default_server != NULL) {
-        Cronet_EngineParams_sohu_dns_default_server_set(engine_params, dns_default_server);
-    }
 
     // Start cronet engine.
     result = Cronet_Engine_StartWithParams(cronet_engine, engine_params);
@@ -842,7 +832,7 @@ static Cronet_EnginePtr create_cronet_engine(const char *dns_config_server, cons
     return cronet_engine;
 }
 
-int av_format_cronet_init(const char *dns_config_server, const char *dns_default_server) {
+int av_format_cronet_init() {
     int ret = 0;
     do {
         // Already initialized.
@@ -855,7 +845,7 @@ int av_format_cronet_init(const char *dns_config_server, const char *dns_default
         cronet_runtime_context->executor_stop_thread_loop   = false;
 
         //Setup Cronet_Engine.
-        cronet_runtime_context->engine = create_cronet_engine(dns_config_server, dns_default_server);
+        cronet_runtime_context->engine = create_cronet_engine();
         if (cronet_runtime_context->engine == NULL) {
             av_log(NULL, AV_LOG_ERROR, "create_cronet_engine fail.\n");
             ret = AVERROR(EINVAL);
